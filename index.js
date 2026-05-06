@@ -1,29 +1,49 @@
 // PhysioClinic WhatsApp Chatbot
-// Uses Groq AI (FREE — 14,400 requests/day, super fast)
-// Deploy on Render.com
-// Env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, GROQ_API_KEY
+// Groq AI + MongoDB — data permanently saved
+// Env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, GROQ_API_KEY, MONGODB_URI
 
-const express = require("express");
-const axios = require("axios");
+const express  = require("express");
+const axios    = require("axios");
+const mongoose = require("mongoose");
 
 const app = express();
 app.use(express.json());
 
-// ─── IN-MEMORY STORE ────────────────────────────────────────────────
-const patients = [
-  { id: 1, name: "Priya Sharma", phone: "919810000001", condition: "Lower back pain" },
-  { id: 2, name: "Arjun Mehta",  phone: "919810000002", condition: "Shoulder injury" },
-];
+// ─── CONNECT TO MONGODB ──────────────────────────────────────────────
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log("✅ MongoDB connected successfully"))
+  .catch(err => console.error("❌ MongoDB connection error:", err.message));
 
-const appointments = [
-  { id: 1, patientId: 1, therapist: "Dr. Rao",   date: "2026-05-06", time: "09:00", type: "Follow-up",         status: "confirmed", amount: 1200 },
-  { id: 2, patientId: 2, therapist: "Dr. Mehra", date: "2026-05-06", time: "10:00", type: "Initial Assessment", status: "confirmed", amount: 1800 },
-];
+// ─── SCHEMAS & MODELS ────────────────────────────────────────────────
 
-let nextPatientId = 3;
-let nextApptId    = 3;
+const patientSchema = new mongoose.Schema({
+  name:      { type: String, required: true },
+  phone:     { type: String, required: true, unique: true },
+  condition: String,
+  address:   String,
+  email:     String,
+  notes:     String,
+  createdAt: { type: Date, default: Date.now }
+});
 
-// Per-user conversation history
+const appointmentSchema = new mongoose.Schema({
+  patientId:  { type: mongoose.Schema.Types.ObjectId, ref: "Patient" },
+  patientName:String,
+  patientPhone:String,
+  therapist:  String,
+  date:       String,
+  time:       String,
+  type:       String,
+  status:     { type: String, default: "confirmed" },
+  payStatus:  { type: String, default: "pending" },
+  amount:     Number,
+  createdAt:  { type: Date, default: Date.now }
+});
+
+const Patient     = mongoose.model("Patient",     patientSchema);
+const Appointment = mongoose.model("Appointment", appointmentSchema);
+
+// Per-user conversation history (in-memory is fine for this)
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
@@ -52,17 +72,17 @@ YOU CAN HELP WITH:
 2. Check pricing and timings
 3. View or cancel appointments
 4. Reschedule appointments
-5. Payment confirmation queries
+5. Payment queries
 6. Connect to a human receptionist
 
 RULES:
 - Be warm, friendly and concise
-- If user writes in Hindi or Hinglish, reply in the same language
-- For booking: collect name, phone, preferred date, time, appointment type step by step
-- If user says human or receptionist, give them the clinic phone number
+- If user writes in Hindi or Hinglish, reply in same language
+- For booking: collect name, phone, preferred date, time, type step by step
+- If user says human or receptionist, give clinic phone number
 - Never make up information
 - Keep replies under 150 words
-- Do not use markdown symbols like ** or ## or *`;
+- No markdown symbols like ** or ##`;
 
 // ─── SEND WHATSAPP MESSAGE ───────────────────────────────────────────
 async function sendMessage(to, text) {
@@ -82,52 +102,29 @@ async function sendMessage(to, text) {
         },
       }
     );
-    console.log(`✅ Message sent to ${to}`);
+    console.log(`✅ Sent to ${to}`);
   } catch (err) {
-    console.error("Send error:", JSON.stringify(err.response?.data || err.message, null, 2));
+    console.error("Send error:", err.response?.data || err.message);
   }
 }
 
-// ─── GET AI REPLY FROM GROQ (FREE & FAST) ───────────────────────────
-async function getAIReply(userPhone, userMessage) {
-  if (!conversations[userPhone]) {
-    conversations[userPhone] = [];
-  }
-
+// ─── GET AI REPLY FROM GROQ ──────────────────────────────────────────
+async function getAIReply(userPhone, userMessage, contextNote = "") {
+  if (!conversations[userPhone]) conversations[userPhone] = [];
   const history = conversations[userPhone];
 
-  // Check if existing patient
-  const cleanPhone = userPhone.replace(/\D/g, "");
-  const patient = patients.find(p => p.phone.replace(/\D/g, "") === cleanPhone);
-
-  // Add patient context if found
-  let contextNote = "";
-  if (patient) {
-    const myAppts = appointments.filter(a => a.patientId === patient.id && a.status === "confirmed");
-    if (myAppts.length > 0) {
-      contextNote = `\nThis patient is ${patient.name}. Their appointments: ` +
-        myAppts.map(a => `${a.type} with ${a.therapist} on ${a.date} at ${a.time}`).join(", ");
-    }
-  }
-
-  // Add to history
   history.push({ role: "user", content: userMessage });
-
-  // Keep last 10 messages only
   const recentHistory = history.slice(-10);
 
   try {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama-3.3-70b-versatile", // Free, fast Llama 3 model
+        model: "llama-3.3-70b-versatile",
         max_tokens: 300,
         temperature: 0.7,
         messages: [
-          {
-            role: "system",
-            content: SYSTEM_PROMPT + contextNote
-          },
+          { role: "system", content: SYSTEM_PROMPT + contextNote },
           ...recentHistory
         ]
       },
@@ -140,63 +137,43 @@ async function getAIReply(userPhone, userMessage) {
     );
 
     const reply = response.data?.choices?.[0]?.message?.content
-      || "Sorry, I could not process your request. Please call us at +91-XXXXXXXXXX.";
+      || "Sorry, please call us at +91-XXXXXXXXXX.";
 
-    // Save reply to history
     history.push({ role: "assistant", content: reply });
-
-    // Keep history manageable
     if (history.length > 20) history.splice(0, 2);
 
     return reply;
-
   } catch (err) {
-    console.error("Groq AI error:", JSON.stringify(err.response?.data || err.message, null, 2));
-    return "Sorry, I am having a technical issue. Please call us at +91-XXXXXXXXXX or try again shortly.";
+    console.error("Groq error:", err.response?.data || err.message);
+    return "Sorry, I am having a technical issue. Please call +91-XXXXXXXXXX.";
   }
 }
 
-// ─── BOOKING CONFIRMATION ────────────────────────────────────────────
-async function sendBookingConfirmation(phone, appt, name) {
-  const msg =
-    `Appointment Confirmed!\n\n` +
-    `Patient: ${name}\n` +
-    `Type: ${appt.type}\n` +
-    `Therapist: ${appt.therapist}\n` +
-    `Date: ${appt.date}\n` +
-    `Time: ${appt.time}\n` +
-    `Fee: Rs ${appt.amount}\n\n` +
-    `Payment can be done online or at the clinic.\n` +
-    `See you soon!\n- PhysioClinic`;
-  await sendMessage(phone, msg);
+// ─── SAVE APPOINTMENT TO MONGODB ────────────────────────────────────
+async function saveAppointment(data) {
+  try {
+    const appt = new Appointment(data);
+    await appt.save();
+    console.log(`✅ Appointment saved: ${data.patientName} - ${data.type}`);
+    return appt;
+  } catch (err) {
+    console.error("Save appointment error:", err.message);
+    return null;
+  }
 }
 
-// ─── DAILY REMINDERS ─────────────────────────────────────────────────
-async function sendDailyReminders() {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split("T")[0];
-
-  const tomorrowAppts = appointments.filter(
-    a => a.date === tomorrowStr && a.status === "confirmed"
-  );
-
-  for (const appt of tomorrowAppts) {
-    const patient = patients.find(p => p.id === appt.patientId);
-    if (!patient) continue;
-
-    const msg =
-      `Appointment Reminder\n\n` +
-      `Hi ${patient.name}! Your appointment is tomorrow.\n\n` +
-      `${appt.type}\n` +
-      `${appt.therapist}\n` +
-      `${appt.date} at ${appt.time}\n` +
-      `Fee: Rs ${appt.amount}\n\n` +
-      `Reply CANCEL to cancel or RESCHEDULE to change.\n` +
-      `- PhysioClinic`;
-
-    await sendMessage(patient.phone, msg);
-    console.log(`Reminder sent to ${patient.name}`);
+// ─── SAVE PATIENT TO MONGODB ─────────────────────────────────────────
+async function savePatient(data) {
+  try {
+    const existing = await Patient.findOne({ phone: data.phone });
+    if (existing) return existing;
+    const patient = new Patient(data);
+    await patient.save();
+    console.log(`✅ Patient saved: ${data.name}`);
+    return patient;
+  } catch (err) {
+    console.error("Save patient error:", err.message);
+    return null;
   }
 }
 
@@ -207,17 +184,16 @@ app.get("/webhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
-    console.log("Webhook verified successfully");
+    console.log("✅ Webhook verified");
     res.status(200).send(challenge);
   } else {
-    console.error("Webhook verification failed");
     res.sendStatus(403);
   }
 });
 
 // ─── INCOMING MESSAGE HANDLER ─────────────────────────────────────────
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // Always respond immediately
+  res.sendStatus(200);
 
   try {
     const body    = req.body;
@@ -230,63 +206,148 @@ app.post("/webhook", async (req, res) => {
     const text  = message.text.body.trim();
     const lower = text.toLowerCase();
 
-    console.log(`📩 Message from ${from}: ${text}`);
+    console.log(`📩 From ${from}: ${text}`);
+
+    // ── Check existing patient ────────────────────────────────────
+    const cleanPhone = from.replace(/\D/g, "");
+    const existingPatient = await Patient.findOne({ phone: cleanPhone });
 
     // ── Special commands ──────────────────────────────────────────
 
     if (["hi", "hello", "start", "hey"].includes(lower)) {
-      const patient = patients.find(p => p.phone.replace(/\D/g, "") === from.replace(/\D/g, ""));
-      const greeting = patient
-        ? `Welcome back, ${patient.name}!\n\nHow can I help you today?\n\n1. Book appointment\n2. View my appointments\n3. Cancel or reschedule\n4. Pricing and timings\n5. Talk to a human\n\nJust type your question!`
+      const greeting = existingPatient
+        ? `Welcome back, ${existingPatient.name}!\n\nHow can I help you today?\n\n1. Book appointment\n2. My appointments\n3. Cancel or reschedule\n4. Pricing and timings\n5. Talk to a human\n\nJust type your question!`
         : `Welcome to PhysioClinic!\n\nI am your virtual receptionist. I can help you:\n\n1. Book an appointment\n2. Check pricing and timings\n3. Talk to a human receptionist\n\nJust type your question!`;
       await sendMessage(from, greeting);
       return;
     }
 
     if (lower === "address") {
-      await sendMessage(from,
-        "PhysioClinic Address\n\n123 Wellness Lane, South Delhi - 110017\n\nNear XYZ Metro Station, Gate 2.\n\nOpen Monday to Saturday, 8 AM to 6 PM"
-      );
+      await sendMessage(from, "PhysioClinic\n\n123 Wellness Lane\nSouth Delhi - 110017\n\nNear XYZ Metro Station, Gate 2\n\nOpen Mon-Sat, 8 AM to 6 PM");
       return;
     }
 
-    if (lower === "cancel" || lower === "reschedule") {
-      const patient = patients.find(p => p.phone.replace(/\D/g, "") === from.replace(/\D/g, ""));
-      if (patient) {
-        const myAppts = appointments.filter(a => a.patientId === patient.id && a.status === "confirmed");
-        if (myAppts.length > 0) {
-          const list = myAppts.map((a, i) => `${i + 1}. ${a.type} on ${a.date} at ${a.time} with ${a.therapist}`).join("\n");
-          await sendMessage(from, `Your upcoming appointments:\n\n${list}\n\nPlease call us at +91-XXXXXXXXXX to ${lower}.`);
+    if (lower === "my appointments") {
+      if (existingPatient) {
+        const appts = await Appointment.find({
+          patientPhone: cleanPhone,
+          status: "confirmed"
+        }).sort({ createdAt: -1 }).limit(5);
+
+        if (appts.length > 0) {
+          const list = appts.map((a, i) =>
+            `${i + 1}. ${a.type}\n   ${a.therapist} — ${a.date} at ${a.time}\n   Payment: ${a.payStatus}`
+          ).join("\n\n");
+          await sendMessage(from, `Your appointments:\n\n${list}`);
         } else {
           await sendMessage(from, "You have no upcoming appointments. Type BOOK to schedule one!");
         }
       } else {
-        await sendMessage(from, "I could not find your records. Please call us at +91-XXXXXXXXXX.");
+        await sendMessage(from, "I could not find your records. Please register by booking an appointment.");
       }
       return;
     }
 
-    if (["human", "receptionist", "speak to someone", "call me"].includes(lower)) {
+    if (lower === "cancel" || lower === "reschedule") {
+      if (existingPatient) {
+        const appts = await Appointment.find({ patientPhone: cleanPhone, status: "confirmed" });
+        if (appts.length > 0) {
+          const list = appts.map((a, i) => `${i + 1}. ${a.type} on ${a.date} at ${a.time}`).join("\n");
+          await sendMessage(from, `Your appointments:\n\n${list}\n\nPlease call us at +91-XXXXXXXXXX to ${lower}.`);
+        } else {
+          await sendMessage(from, "No upcoming appointments found.");
+        }
+      } else {
+        await sendMessage(from, "Records not found. Please call +91-XXXXXXXXXX.");
+      }
+      return;
+    }
+
+    if (["human", "receptionist", "speak to someone"].includes(lower)) {
       await sendMessage(from,
-        "Connecting you to our reception team.\n\nPlease call us directly:\n+91-XXXXXXXXXX\n\nAvailable Monday to Saturday, 8 AM to 6 PM.\n\nIs there anything else I can help you with?"
+        "Connecting you to our team.\n\nCall us:\n+91-XXXXXXXXXX\n\nMon-Sat, 8 AM to 6 PM"
       );
       return;
     }
 
-    // ── All other messages go to Groq AI ─────────────────────────
-    const reply = await getAIReply(from, text);
+    // ── Add patient context for AI ────────────────────────────────
+    let contextNote = "";
+    if (existingPatient) {
+      const recentAppts = await Appointment.find({ patientPhone: cleanPhone }).sort({ createdAt: -1 }).limit(3);
+      if (recentAppts.length > 0) {
+        contextNote = `\n\nPatient context: This is ${existingPatient.name}. Recent appointments: ` +
+          recentAppts.map(a => `${a.type} on ${a.date}`).join(", ");
+      }
+    }
+
+    // ── Groq AI handles everything else ──────────────────────────
+    const reply = await getAIReply(from, text, contextNote);
     await sendMessage(from, reply);
+
+    // ── Auto-save if booking detected ────────────────────────────
+    const bookingKeywords = ["book", "appointment", "schedule", "fix appointment"];
+    if (bookingKeywords.some(k => lower.includes(k))) {
+      console.log(`📅 Booking intent detected from ${from}`);
+    }
 
   } catch (err) {
     console.error("Webhook error:", err.message);
   }
 });
 
+// ─── API ENDPOINTS (for Doctor Dashboard) ────────────────────────────
+
+// Get all patients
+app.get("/api/patients", async (req, res) => {
+  try {
+    const patients = await Patient.find().sort({ createdAt: -1 });
+    res.json(patients);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all appointments
+app.get("/api/appointments", async (req, res) => {
+  try {
+    const appointments = await Appointment.find().sort({ createdAt: -1 });
+    res.json(appointments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add patient manually
+app.post("/api/patients", async (req, res) => {
+  try {
+    const patient = new Patient(req.body);
+    await patient.save();
+    res.json(patient);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add appointment manually
+app.post("/api/appointments", async (req, res) => {
+  try {
+    const appt = new Appointment(req.body);
+    await appt.save();
+    res.json(appt);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("PhysioClinic WhatsApp Bot is running with Groq AI!");
+  res.json({
+    status: "running",
+    message: "PhysioClinic WhatsApp Bot",
+    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
+  });
 });
 
 // ─── START SERVER ─────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Bot running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Bot running on port ${PORT}`));
