@@ -120,7 +120,7 @@ async function getAIReply(userPhone, userMessage) {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama3-8b-8192", // Free, fast Llama 3 model
+        model: "llama-3.3-70b-versatile", // Free, fast Llama 3 model
         max_tokens: 300,
         temperature: 0.7,
         messages: [
