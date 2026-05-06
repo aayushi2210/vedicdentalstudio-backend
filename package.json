@@ -1,7 +1,7 @@
 {
   "name": "physioclinic-whatsapp-bot",
   "version": "1.0.0",
-  "description": "WhatsApp chatbot for PhysioClinic using Gemini AI (free)",
+  "description": "WhatsApp chatbot for PhysioClinic",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -11,7 +11,5 @@
     "express": "^4.18.0",
     "node-cron": "^3.0.3"
   },
-  "engines": {
-    "node": ">=18.0.0"
-  }
+  
 }

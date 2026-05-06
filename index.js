@@ -1,7 +1,7 @@
 // PhysioClinic WhatsApp Chatbot
-// Uses Google Gemini AI (FREE) instead of Anthropic
-// Deploy on Render.com — Node.js 18+
-// Env vars needed: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, GEMINI_API_KEY
+// Uses Groq AI (FREE — 14,400 requests/day, super fast)
+// Deploy on Render.com
+// Env vars: WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, VERIFY_TOKEN, GROQ_API_KEY
 
 const express = require("express");
 const axios = require("axios");
@@ -16,8 +16,8 @@ const patients = [
 ];
 
 const appointments = [
-  { id: 1, patientId: 1, therapist: "Dr. Rao",   date: "2026-05-06", time: "09:00", type: "Follow-up",          status: "confirmed", amount: 1200 },
-  { id: 2, patientId: 2, therapist: "Dr. Mehra", date: "2026-05-06", time: "10:00", type: "Initial Assessment",  status: "confirmed", amount: 1800 },
+  { id: 1, patientId: 1, therapist: "Dr. Rao",   date: "2026-05-06", time: "09:00", type: "Follow-up",         status: "confirmed", amount: 1200 },
+  { id: 2, patientId: 2, therapist: "Dr. Mehra", date: "2026-05-06", time: "10:00", type: "Initial Assessment", status: "confirmed", amount: 1800 },
 ];
 
 let nextPatientId = 3;
@@ -27,7 +27,7 @@ let nextApptId    = 3;
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in Noida, India.
+const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in South Delhi, India.
 
 CLINIC DETAILS:
 - Hours: Monday to Saturday, 8:00 AM to 6:00 PM. Closed Sundays.
@@ -53,7 +53,7 @@ YOU CAN HELP WITH:
 3. View or cancel appointments
 4. Reschedule appointments
 5. Payment confirmation queries
-6. Connect to a human 
+6. Connect to a human receptionist
 
 RULES:
 - Be warm, friendly and concise
@@ -61,8 +61,8 @@ RULES:
 - For booking: collect name, phone, preferred date, time, appointment type step by step
 - If user says human or receptionist, give them the clinic phone number
 - Never make up information
-- Keep replies under 200 words
-- Do not use markdown symbols like ** or ##`;
+- Keep replies under 150 words
+- Do not use markdown symbols like ** or ## or *`;
 
 // ─── SEND WHATSAPP MESSAGE ───────────────────────────────────────────
 async function sendMessage(to, text) {
@@ -88,35 +88,7 @@ async function sendMessage(to, text) {
   }
 }
 
-// ─── GEMINI CALL WITH AUTO RETRY ────────────────────────────────────
-async function callGemini(contents, contextNote, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          system_instruction: { parts: [{ text: SYSTEM_PROMPT + contextNote }] },
-          contents,
-          generationConfig: { maxOutputTokens: 300, temperature: 0.7 }
-        },
-        { headers: { "Content-Type": "application/json" } }
-      );
-      return response.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-    } catch (err) {
-      const status = err.response?.data?.error?.status;
-      if (status === "RESOURCE_EXHAUSTED" && i < retries - 1) {
-        console.log(`Rate limited — retrying in ${(i + 1) * 5} seconds...`);
-        await new Promise(r => setTimeout(r, (i + 1) * 5000)); // wait 5s, 10s, 15s
-      } else {
-        console.error("Gemini AI error:", JSON.stringify(err.response?.data || err.message, null, 2));
-        return null;
-      }
-    }
-  }
-  return null;
-}
-
-// ─── GET AI REPLY FROM GEMINI (FREE) ────────────────────────────────
+// ─── GET AI REPLY FROM GROQ (FREE & FAST) ───────────────────────────
 async function getAIReply(userPhone, userMessage) {
   if (!conversations[userPhone]) {
     conversations[userPhone] = [];
@@ -128,7 +100,7 @@ async function getAIReply(userPhone, userMessage) {
   const cleanPhone = userPhone.replace(/\D/g, "");
   const patient = patients.find(p => p.phone.replace(/\D/g, "") === cleanPhone);
 
-  // Build context if patient has appointments
+  // Add patient context if found
   let contextNote = "";
   if (patient) {
     const myAppts = appointments.filter(a => a.patientId === patient.id && a.status === "confirmed");
@@ -139,21 +111,52 @@ async function getAIReply(userPhone, userMessage) {
   }
 
   // Add to history
-  history.push({ role: "user", parts: [{ text: userMessage }] });
+  history.push({ role: "user", content: userMessage });
 
   // Keep last 10 messages only
   const recentHistory = history.slice(-10);
 
-  const reply = await callGemini(recentHistory, contextNote);
+  try {
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model: "llama3-8b-8192", // Free, fast Llama 3 model
+        max_tokens: 300,
+        temperature: 0.7,
+        messages: [
+          {
+            role: "system",
+            content: SYSTEM_PROMPT + contextNote
+          },
+          ...recentHistory
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        }
+      }
+    );
 
-  if (reply) {
-    history.push({ role: "model", parts: [{ text: reply }] });
+    const reply = response.data?.choices?.[0]?.message?.content
+      || "Sorry, I could not process your request. Please call us at +91-XXXXXXXXXX.";
+
+    // Save reply to history
+    history.push({ role: "assistant", content: reply });
+
+    // Keep history manageable
+    if (history.length > 20) history.splice(0, 2);
+
     return reply;
+
+  } catch (err) {
+    console.error("Groq AI error:", JSON.stringify(err.response?.data || err.message, null, 2));
+    return "Sorry, I am having a technical issue. Please call us at +91-XXXXXXXXXX or try again shortly.";
   }
-  return "Sorry, I am a little busy right now. Please try again in a moment or call us at +91-XXXXXXXXXX.";
 }
 
-// ─── SEND BOOKING CONFIRMATION ───────────────────────────────────────
+// ─── BOOKING CONFIRMATION ────────────────────────────────────────────
 async function sendBookingConfirmation(phone, appt, name) {
   const msg =
     `Appointment Confirmed!\n\n` +
@@ -164,12 +167,11 @@ async function sendBookingConfirmation(phone, appt, name) {
     `Time: ${appt.time}\n` +
     `Fee: Rs ${appt.amount}\n\n` +
     `Payment can be done online or at the clinic.\n` +
-    `We will send a reminder before your appointment.\n\n` +
     `See you soon!\n- PhysioClinic`;
   await sendMessage(phone, msg);
 }
 
-// ─── DAILY REMINDERS (run via cron) ──────────────────────────────────
+// ─── DAILY REMINDERS ─────────────────────────────────────────────────
 async function sendDailyReminders() {
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -215,7 +217,7 @@ app.get("/webhook", (req, res) => {
 
 // ─── INCOMING MESSAGE HANDLER ─────────────────────────────────────────
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // Always respond 200 immediately
+  res.sendStatus(200); // Always respond immediately
 
   try {
     const body    = req.body;
@@ -228,7 +230,7 @@ app.post("/webhook", async (req, res) => {
     const text  = message.text.body.trim();
     const lower = text.toLowerCase();
 
-    console.log(`Message from ${from}: ${text}`);
+    console.log(`📩 Message from ${from}: ${text}`);
 
     // ── Special commands ──────────────────────────────────────────
 
@@ -254,7 +256,7 @@ app.post("/webhook", async (req, res) => {
         const myAppts = appointments.filter(a => a.patientId === patient.id && a.status === "confirmed");
         if (myAppts.length > 0) {
           const list = myAppts.map((a, i) => `${i + 1}. ${a.type} on ${a.date} at ${a.time} with ${a.therapist}`).join("\n");
-          await sendMessage(from, `Your upcoming appointments:\n\n${list}\n\nPlease call us at +91-XXXXXXXXXX to ${lower} or type your query.`);
+          await sendMessage(from, `Your upcoming appointments:\n\n${list}\n\nPlease call us at +91-XXXXXXXXXX to ${lower}.`);
         } else {
           await sendMessage(from, "You have no upcoming appointments. Type BOOK to schedule one!");
         }
@@ -266,12 +268,12 @@ app.post("/webhook", async (req, res) => {
 
     if (["human", "receptionist", "speak to someone", "call me"].includes(lower)) {
       await sendMessage(from,
-        "Connecting you to our team.\n\nPlease call us directly:\n+91-XXXXXXXXXX\n\nAvailable Monday to Saturday, 8 AM to 6 PM.\n\nIs there anything else I can help you with?"
+        "Connecting you to our reception team.\n\nPlease call us directly:\n+91-XXXXXXXXXX\n\nAvailable Monday to Saturday, 8 AM to 6 PM.\n\nIs there anything else I can help you with?"
       );
       return;
     }
 
-    // ── All other messages go to Gemini AI ────────────────────────
+    // ── All other messages go to Groq AI ─────────────────────────
     const reply = await getAIReply(from, text);
     await sendMessage(from, reply);
 
@@ -282,7 +284,7 @@ app.post("/webhook", async (req, res) => {
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.send("PhysioClinic WhatsApp Bot is running!");
+  res.send("PhysioClinic WhatsApp Bot is running with Groq AI!");
 });
 
 // ─── START SERVER ─────────────────────────────────────────────────────
