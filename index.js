@@ -230,15 +230,52 @@ app.post("/webhook", async (req, res) => {
     // ── Auto-save new patient on first message ────────────────────
     const cleanPhone = from.replace(/\D/g, "");
     let existingPatient = null;
+
     if (dbConnected) {
       existingPatient = await Patient.findOne({ phone: cleanPhone });
+
       if (!existingPatient) {
+        // New patient — save with temp name and ask for real name
         existingPatient = await Patient.create({
           name: `Patient ${cleanPhone.slice(-4)}`,
           phone: cleanPhone,
           notes: `First message: "${text}"`,
         });
         console.log(`✅ New patient saved: ${cleanPhone}`);
+
+        // Ask for name before proceeding
+        await sendMessage(from,
+          `Welcome to PhysioClinic! 🏥\n\nTo serve you better, may I know your name please?`
+        );
+
+        // Save state — waiting for name
+        conversations[from] = conversations[from] || [];
+        conversations[from].push({ role: "system", content: "WAITING_FOR_NAME" });
+        return;
+      }
+
+      // Check if waiting for name
+      const history = conversations[from] || [];
+      const waitingForName = history.some(m => m.content === "WAITING_FOR_NAME");
+
+      if (waitingForName) {
+        // Save the name patient just typed
+        const patientName = text.trim();
+        await Patient.findByIdAndUpdate(existingPatient._id, {
+          name: patientName,
+          notes: existingPatient.notes
+        });
+        existingPatient.name = patientName;
+
+        // Remove waiting state
+        conversations[from] = history.filter(m => m.content !== "WAITING_FOR_NAME");
+
+        console.log(`✅ Patient name updated: ${patientName}`);
+
+        await sendMessage(from,
+          `Thank you, ${patientName}! 😊\n\nHow can I help you today?\n\n1. Book an appointment\n2. Check pricing and timings\n3. Talk to a human receptionist\n\nJust type your question!`
+        );
+        return;
       }
     }
 
@@ -339,38 +376,106 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    if (lower === "my appointments") {
+    // ── My Appointments ───────────────────────────────────────────
+    if (lower === "my appointments" || lower === "appointments" || lower === "my bookings") {
       if (existingPatient) {
         const appts = await Appointment.find({
           patientPhone: cleanPhone,
           status: "confirmed"
-        }).sort({ createdAt: -1 }).limit(5);
+        }).sort({ date: 1 }).limit(5);
 
         if (appts.length > 0) {
           const list = appts.map((a, i) =>
-            `${i + 1}. ${a.type}\n   ${a.therapist} — ${a.date} at ${a.time}\n   Payment: ${a.payStatus}`
+            `${i + 1}. ${a.type}\n   👨‍⚕️ ${a.therapist}\n   📅 ${a.date} at ${a.time}\n   💰 ${a.payStatus === "paid" ? "Paid ✅" : a.payStatus === "clinic" ? "Pay at clinic 🏥" : "Pending ⚠️"}`
           ).join("\n\n");
-          await sendMessage(from, `Your appointments:\n\n${list}`);
+          await sendMessage(from,
+            `📋 Your Upcoming Appointments\n\n${list}\n\nTo cancel, reply:\nCANCEL 1 (for appointment 1)\nCANCEL 2 (for appointment 2)`
+          );
+          // Save appointments in memory for cancel reference
+          conversations[from] = conversations[from] || [];
+          conversations[from] = conversations[from].filter(m => !m.appointmentList);
+          conversations[from].push({ appointmentList: appts.map(a => a._id.toString()) });
         } else {
-          await sendMessage(from, "You have no upcoming appointments. Type BOOK to schedule one!");
+          await sendMessage(from,
+            `You have no upcoming appointments.\n\nType BOOK to schedule one! 📅`
+          );
         }
       } else {
-        await sendMessage(from, "I could not find your records. Please register by booking an appointment.");
+        await sendMessage(from,
+          `I could not find your records.\n\nPlease message us to register and book an appointment.`
+        );
       }
       return;
     }
 
-    if (lower === "cancel" || lower === "reschedule") {
+    // ── Cancel Appointment ────────────────────────────────────────
+    if (lower.startsWith("cancel")) {
       if (existingPatient) {
-        const appts = await Appointment.find({ patientPhone: cleanPhone, status: "confirmed" });
-        if (appts.length > 0) {
-          const list = appts.map((a, i) => `${i + 1}. ${a.type} on ${a.date} at ${a.time}`).join("\n");
-          await sendMessage(from, `Your appointments:\n\n${list}\n\nPlease call us at +91-XXXXXXXXXX to ${lower}.`);
+        // Check if they said "CANCEL 1" or "CANCEL 2" etc
+        const numMatch = text.match(/cancel\s+(\d+)/i);
+
+        if (numMatch) {
+          const idx = parseInt(numMatch[1]) - 1;
+          const history = conversations[from] || [];
+          const apptListEntry = history.find(m => m.appointmentList);
+
+          if (apptListEntry && apptListEntry.appointmentList[idx]) {
+            const apptId = apptListEntry.appointmentList[idx];
+            const appt = await Appointment.findById(apptId);
+
+            if (appt && appt.status === "confirmed") {
+              await Appointment.findByIdAndUpdate(apptId, { status: "cancelled" });
+              console.log(`✅ Appointment cancelled: ${apptId}`);
+              await sendMessage(from,
+                `✅ Appointment Cancelled\n\n${appt.type}\n${appt.therapist}\n${appt.date} at ${appt.time}\n\nYour appointment has been cancelled successfully.\n\nTo book a new appointment, type BOOK. 📅`
+              );
+            } else {
+              await sendMessage(from, "This appointment is already cancelled or not found.");
+            }
+          } else {
+            // Show appointments first then ask to cancel
+            const appts = await Appointment.find({
+              patientPhone: cleanPhone,
+              status: "confirmed"
+            }).sort({ date: 1 }).limit(5);
+
+            if (appts.length > 0) {
+              const list = appts.map((a, i) =>
+                `${i + 1}. ${a.type} — ${a.date} at ${a.time}`
+              ).join("\n");
+              conversations[from] = conversations[from] || [];
+              conversations[from] = conversations[from].filter(m => !m.appointmentList);
+              conversations[from].push({ appointmentList: appts.map(a => a._id.toString()) });
+              await sendMessage(from,
+                `Which appointment do you want to cancel?\n\n${list}\n\nReply:\nCANCEL 1\nCANCEL 2\netc.`
+              );
+            } else {
+              await sendMessage(from, "You have no upcoming appointments to cancel.");
+            }
+          }
         } else {
-          await sendMessage(from, "No upcoming appointments found.");
+          // Just said "cancel" without number — show list
+          const appts = await Appointment.find({
+            patientPhone: cleanPhone,
+            status: "confirmed"
+          }).sort({ date: 1 }).limit(5);
+
+          if (appts.length > 0) {
+            const list = appts.map((a, i) =>
+              `${i + 1}. ${a.type} — ${a.date} at ${a.time} with ${a.therapist}`
+            ).join("\n");
+            conversations[from] = conversations[from] || [];
+            conversations[from] = conversations[from].filter(m => !m.appointmentList);
+            conversations[from].push({ appointmentList: appts.map(a => a._id.toString()) });
+            await sendMessage(from,
+              `Which appointment do you want to cancel?\n\n${list}\n\nReply with:\nCANCEL 1\nCANCEL 2\netc.`
+            );
+          } else {
+            await sendMessage(from, "You have no upcoming appointments to cancel.");
+          }
         }
       } else {
-        await sendMessage(from, "Records not found. Please call +91-XXXXXXXXXX.");
+        await sendMessage(from, "I could not find your records. Please call us at +91-XXXXXXXXXX.");
       }
       return;
     }
