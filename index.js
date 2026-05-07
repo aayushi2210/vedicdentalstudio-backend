@@ -543,7 +543,7 @@ Return ONLY the JSON, no other text.`
 const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "919711311785";
 
 // ─── SEND DAILY SCHEDULE TO DOCTOR ───────────────────────────────────
-app.post("/api/send-schedule", async (req, res) => {
+const sendScheduleHandler = async (req, res) => {
   try {
     const today = new Date().toISOString().split("T")[0];
     const todayAppts = await Appointment.find({
@@ -557,7 +557,7 @@ app.post("/api/send-schedule", async (req, res) => {
       );
     } else {
       const lines = todayAppts.map((a, i) =>
-        `${i + 1}. ${a.patientName}\n   📋 ${a.type}\n   👨‍⚕️ ${a.therapist}\n   🕐 ${a.time}\n   💰 ${a.payStatus === "paid" ? "Paid ✅" : a.payStatus === "clinic" ? "Pay at clinic 🏥" : "Pending ⚠️"}\n   💵 ₹${a.amount}`
+        `${i + 1}. ${a.patientName}\n   📋 ${a.type}\n   👨‍⚕️ ${a.therapist}\n   🕐 ${a.time}\n   💰 ${a.payStatus === "paid" ? "Paid ✅" : a.payStatus === "clinic" ? "Pay at clinic 🏥" : "Pending ⚠️"}\n   💵 Rs.${a.amount}`
       ).join("\n\n");
 
       await sendMessage(DOCTOR_PHONE,
@@ -565,12 +565,16 @@ app.post("/api/send-schedule", async (req, res) => {
       );
     }
 
-    res.json({ success: true, message: "Schedule sent to doctor!" });
+    res.json({ success: true, message: "Schedule sent to doctor on WhatsApp!" });
   } catch (err) {
     console.error("Send schedule error:", err.message);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+};
+
+// Both GET and POST work
+app.get("/api/send-schedule", sendScheduleHandler);
+app.post("/api/send-schedule", sendScheduleHandler);
 
 // ─── API ENDPOINTS (for Doctor Dashboard) ────────────────────────────
 
