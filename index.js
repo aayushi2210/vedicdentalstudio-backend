@@ -66,11 +66,11 @@ const Appointment = mongoose.model("Appointment", appointmentSchema);
 const conversations = {};
 
 // ─── CLINIC SYSTEM PROMPT ───────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in South Delhi, India.
+const SYSTEM_PROMPT = `You are a WhatsApp chatbot receptionist for PhysioClinic, a physiotherapy clinic in Noida Sector-41 , India.
 
 CLINIC DETAILS:
 - Hours: Monday to Saturday, 8:00 AM to 6:00 PM. Closed Sundays.
-- Location: South Delhi
+- Location: Noida Sector-41
 
 THERAPISTS:
 - Dr. Rao: Back and spine specialist
