@@ -223,11 +223,93 @@ app.post("/webhook", async (req, res) => {
       existingPatient = await Patient.findOne({ phone: cleanPhone });
       if (!existingPatient) {
         existingPatient = await Patient.create({
-          name: `Patient ${cleanPhone.slice(-4)}`, // last 4 digits as temp name
+          name: `Patient ${cleanPhone.slice(-4)}`,
           phone: cleanPhone,
           notes: `First message: "${text}"`,
         });
         console.log(`✅ New patient saved: ${cleanPhone}`);
+      }
+    }
+
+    // ── Auto-detect and save appointment from conversation ────────
+    if (dbConnected && existingPatient) {
+      const datePattern = /\b(\d{4}-\d{2}-\d{2}|today|tomorrow|\d{1,2}(?:st|nd|rd|th)?(?:\s+\w+)?)\b/i;
+      const timePattern = /\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)|\d{2}:\d{2})\b/i;
+      const therapistPattern = /dr\.?\s*(rao|mehra|singh)/i;
+      const typePattern = /(initial assessment|follow.?up|walk.?in|review|physiotherapy)/i;
+
+      const hasDate = datePattern.test(text);
+      const hasTime = timePattern.test(text);
+      const bookingWords = ["book","appointment","schedule","confirm","fix appointment","slot"];
+      const isBooking = bookingWords.some(k => lower.includes(k));
+
+      if (isBooking && (hasDate || hasTime)) {
+        // Extract details
+        const therapistMatch = text.match(therapistPattern);
+        const typeMatch = text.match(typePattern);
+        const timeMatch = text.match(timePattern);
+
+        // Determine date
+        let apptDate = new Date().toISOString().split("T")[0]; // today
+        if (lower.includes("tomorrow")) {
+          const tomorrow = new Date();
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          apptDate = tomorrow.toISOString().split("T")[0];
+        }
+        const explicitDate = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+        if (explicitDate) apptDate = explicitDate[1];
+
+        // Format time
+        let apptTime = "10:00";
+        if (timeMatch) {
+          const t = timeMatch[1].toLowerCase().replace(/\s/g, "");
+          if (t.includes("am") || t.includes("pm")) {
+            const num = parseInt(t);
+            const isPm = t.includes("pm");
+            const hour = isPm && num !== 12 ? num + 12 : (!isPm && num === 12 ? 0 : num);
+            apptTime = `${String(hour).padStart(2, "0")}:00`;
+          } else {
+            apptTime = t;
+          }
+        }
+
+        const apptType = typeMatch
+          ? typeMatch[1].charAt(0).toUpperCase() + typeMatch[1].slice(1)
+          : "Initial Assessment";
+
+        const therapist = therapistMatch
+          ? `Dr. ${therapistMatch[1].charAt(0).toUpperCase() + therapistMatch[1].slice(1)}`
+          : "Dr. Rao";
+
+        const priceMap = {
+          "Initial assessment": 1800, "Follow-up": 1200,
+          "Walk-in": 900, "Review": 1000, "Physiotherapy": 1500
+        };
+        const amount = Object.entries(priceMap).find(([k]) =>
+          apptType.toLowerCase().includes(k.toLowerCase()))?.[1] || 1200;
+
+        // Save appointment
+        const existing = await Appointment.findOne({
+          patientPhone: cleanPhone,
+          date: apptDate,
+          time: apptTime
+        });
+
+        if (!existing) {
+          await Appointment.create({
+            patientId: existingPatient._id,
+            patientName: existingPatient.name,
+            patientPhone: cleanPhone,
+            therapist,
+            date: apptDate,
+            time: apptTime,
+            type: apptType,
+            status: "confirmed",
+            payStatus: "pending",
+            amount
+          });
+          console.log(`✅ Appointment saved: ${existingPatient.name} — ${apptDate} at ${apptTime}`);
+        }
       }
     }
 
