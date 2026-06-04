@@ -411,10 +411,13 @@ export default function App(){
   };
 
   const saveAppt=async()=>{
-    try{
-      let patientId="",patientName="",patientPhone="";
-      if(patMode==="new"){
-        if(!nap.name||!nap.phone){alert("Patient name and phone required.");return;}
+    const apptErrs=validateForm({date:na.date,time:na.time});
+    if(Object.keys(apptErrs).length){alert(Object.values(apptErrs)[0]);return;}
+  try{
+    let patientId="",patientName="",patientPhone="";
+    if(patMode==="new"){
+      const patErrs=validateForm({name:nap.name,phone:nap.phone});
+      if(Object.keys(patErrs).length){alert(Object.values(patErrs)[0]);return;}
         const pr=await fetch(`${API}/api/patients`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:nap.name,phone:nap.phone,condition:nap.condition})});
         const savedPat=await pr.json();
         patientId=savedPat._id;patientName=savedPat.name;patientPhone=savedPat.phone;
@@ -435,7 +438,8 @@ export default function App(){
   };
 
   const savePat=async()=>{
-    if(!np.name||!np.phone){alert("Name and phone required.");return;}
+    const errs=validateForm({name:np.name,phone:np.phone,email:np.email});
+    if(Object.keys(errs).length){alert(Object.values(errs)[0]);return;}
     try{
       const r=await fetch(`${API}/api/patients`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(np)});
       const saved=await r.json();
