@@ -28,6 +28,7 @@ const appointmentSchema = new mongoose.Schema({
   // NEW — clinic visit vs video consultation
   mode:      { type: String, enum: ['clinic', 'video'], default: 'clinic' },
   videoLink: { type: String, trim: true },     // Jitsi room link for video consults
+  reason:    { type: String, trim: true },      // why the patient wants the consultation
   language:  { type: String, enum: ['hi', 'en'], default: 'en' },
 
   // Payment is clinic-only; doctor marks paid manually from the dashboard.
