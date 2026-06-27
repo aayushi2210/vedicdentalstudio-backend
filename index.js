@@ -105,6 +105,9 @@ const T = {
   noSlots: (lang) => lang === "hi"
     ? `Us din koi slot khaali nahi hai. Kripya doosri date bataiye.`
     : `No slots are free that day. Please try another date.`,
+  askReason: (lang) => lang === "hi"
+    ? `Theek hai! 📋 Booking confirm karne se pehle — aap *kis problem* ke liye consultation lena chahte hain? (jaise: daant me dard, sujan, cleaning, checkup)\n\n💵 Consultation fee: ₹${CONSULT_FEE} (clinic par cash/UPI)`
+    : `Great! 📋 Before I confirm — what is the consultation *for*? (e.g. tooth pain, swelling, cleaning, checkup)\n\n💵 Consultation fee: ₹${CONSULT_FEE} (pay at clinic, cash/UPI)`,
   booked: (lang, a) => {
     const when = `${a.date} ${a.time}`;
     const vid  = a.mode === "video" && a.videoLink
@@ -213,16 +216,33 @@ async function getAIReply(phone, msg, lang, ctx = "") {
       model: "llama-3.3-70b-versatile", max_tokens: 280, temperature: 0.7,
       messages: [{ role: "system", content: SYSTEM_PROMPT + (lang === "hi" ? "\nReply in Hindi/Hinglish." : "") + ctx }, ...recent],
     }, { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } });
-    const reply = r.data?.choices?.[0]?.message?.content || "Please call us.";
+    const reply = r.data?.choices?.[0]?.message?.content || "Please call us on 9711311785";
     h.push({ role: "assistant", content: reply });
     if (h.length > 20) h.splice(0, 2);
     return reply;
-  } catch { return lang === "hi" ? "Technical dikkat aa rahi hai, kripya call karein." : "Technical issue, please call us."; }
+  } catch { return lang === "hi" ? "Technical dikkat aa rahi hai, kripya call karein." : "Technical issue, please call us on 9711311785"; }
 }
 
 // ════════════════════════════════════════════════════════════════════
 //  WEBHOOK
 // ════════════════════════════════════════════════════════════════════
+
+// (#6) create a confirmed booking + notify patient and doctor (reason included)
+async function createBooking({ from, patient, cleanPhone, lang, date, time, mode, type, reason }) {
+  const appt = await Appointment.create({
+    patientId: patient._id, patientName: patient.name, patientPhone: cleanPhone,
+    therapist: DOCTOR_NAME, date, time,
+    type: type || "Consultation", status: "confirmed",
+    reason: reason || undefined,
+    mode, language: lang, payStatus: "clinic", amount: CONSULT_FEE,
+    videoLink: mode === "video" ? (process.env.ZOOM_LINK || `https://meet.jit.si/VedicDental-${Date.now().toString(36)}`) : undefined,
+    bookedVia: "whatsapp",
+  });
+  await sendMessage(from, T.booked(lang, appt));
+  await sendMessage(DOCTOR_PHONE, `🆕 New booking\n\n${appt.patientName} (${cleanPhone})\n${appt.type} · ${mode === "video" ? "🎥 video" : "📍 clinic"}\n📅 ${appt.date} ${appt.time}${appt.reason ? `\n📝 Reason: ${appt.reason}` : ""}${mode === "video" && appt.videoLink ? `\n🎥 Join: ${appt.videoLink}` : ""}\n\n— ${CLINIC}`);
+  return appt;
+}
+
 app.get("/webhook", (req, res) => {
   const { "hub.mode": mode, "hub.verify_token": token, "hub.challenge": challenge } = req.query;
   if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) return res.status(200).send(challenge);
@@ -299,6 +319,21 @@ app.post("/webhook", async (req, res) => {
       patient.name = name; patient.profileComplete = true;
       conversations[from] = hist.filter(m => m.content !== "WAITING_FOR_PROFILE");
       await sendMessage(from, T.profileDone(lang, name));
+      return;
+    }
+
+    // ── (#6) PENDING BOOKING — patient's reply is the consultation reason ──
+    const pendingEntry = hist.find(m => m.pendingBooking);
+    if (pendingEntry) {
+      const pb = pendingEntry.pendingBooking;
+      conversations[from] = hist.filter(m => !m.pendingBooking);
+      const clash = await Appointment.findOne({ date: pb.date, time: pb.time, status: "confirmed" });
+      if (clash) {
+        const free = await freeSlots(pb.date);
+        await sendMessage(from, free.length ? T.slotTaken(lang, pb.time, free.slice(0, 8).join("   ")) : T.noSlots(lang));
+        return;
+      }
+      await createBooking({ from, patient, cleanPhone, lang, date: pb.date, time: pb.time, mode: pb.mode, type: pb.type, reason: text.trim() });
       return;
     }
 
@@ -380,17 +415,14 @@ hasAppointment=true only if BOTH date AND time are present. mode="video" if pati
             await sendMessage(from, T.slotTaken(lang, d.time, free.slice(0, 8).join("   "))); return;
           }
           const mode = d.mode === "video" ? "video" : "clinic";
-          const appt = await Appointment.create({
-            patientId: patient._id, patientName: patient.name, patientPhone: cleanPhone,
-            therapist: DOCTOR_NAME, date: d.date, time: d.time,
-            type: d.type || "Consultation", status: "confirmed",
-            reason: d.reason || undefined,
-            mode, language: lang, payStatus: "clinic", amount: CONSULT_FEE,
-            videoLink: mode === "video" ? (process.env.ZOOM_LINK || `https://meet.jit.si/VedicDental-${Date.now().toString(36)}`) : undefined,
-            bookedVia: "whatsapp",
-          });
-          await sendMessage(from, T.booked(lang, appt));
-          await sendMessage(DOCTOR_PHONE, `🆕 New booking\n\n${appt.patientName} (${cleanPhone})\n${appt.type} · ${mode === "video" ? "🎥 video" : "📍 clinic"}\n📅 ${appt.date} ${appt.time}${appt.reason ? `\n📝 Reason: ${appt.reason}` : ""}${mode === "video" && appt.videoLink ? `\n🎥 Join: ${appt.videoLink}` : ""}\n\n— ${CLINIC}`);
+          // (#6) reason is required — if patient hasn't said it yet, ask + show fee, hold the booking
+          if (!d.reason) {
+            conversations[from] = (conversations[from] || []).filter(m => !m.pendingBooking);
+            conversations[from].push({ pendingBooking: { date: d.date, time: d.time, mode, type: d.type || "Consultation" } });
+            await sendMessage(from, T.askReason(lang));
+            return;
+          }
+          await createBooking({ from, patient, cleanPhone, lang, date: d.date, time: d.time, mode, type: d.type, reason: d.reason });
           return;
         }
       } catch (e) { console.log("Extraction error:", e.message); }
