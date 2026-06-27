@@ -16,6 +16,7 @@ const packageSchema = new mongoose.Schema({
   therapist:   { type: String, trim: true },
   startDate:   { type: String, validate: { validator: isValidDateString, message: 'Start date must be YYYY-MM-DD' } },
   active:      { type: Boolean, default: true },
+  renewalNotified: { type: Boolean, default: false },   // renewal reminder already sent
 }, { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } });
 
 // Sessions left = total - done (never below 0)
