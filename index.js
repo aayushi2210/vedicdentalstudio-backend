@@ -40,7 +40,7 @@ const CONSULT_FEE  = 500;
 const REVIEW_LINK  = process.env.GOOGLE_REVIEW_LINK || "";
 // Clinic working hours — edit this list to match the studio's real slots.
 const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
-               "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
+               "16:00","16:30","17:00","17:30","18:00","18:30","19:00"];
 const CLOSED_DAY = 0; // 0 = Sunday closed
 
 // ─── MONGODB ─────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ if (process.env.MONGODB_URI) {
   console.log("⚠️ No MONGODB_URI — running without database");
 }
 
-const { Patient, Appointment, Package, TreatmentPlan, Session, Invoice, Feedback, Document } = require("./models");
+const { Patient, Appointment, Package, PackageTemplate, TreatmentPlan, Session, Invoice, Feedback, Document } = require("./models");
 
 // ─── CLOUDINARY (documents) ──────────────────────────────────────────
 const CLOUD_READY = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
@@ -216,11 +216,11 @@ async function getAIReply(phone, msg, lang, ctx = "") {
       model: "llama-3.3-70b-versatile", max_tokens: 280, temperature: 0.7,
       messages: [{ role: "system", content: SYSTEM_PROMPT + (lang === "hi" ? "\nReply in Hindi/Hinglish." : "") + ctx }, ...recent],
     }, { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } });
-    const reply = r.data?.choices?.[0]?.message?.content || "Please call us on 9711311785";
+    const reply = r.data?.choices?.[0]?.message?.content || "Please call us.";
     h.push({ role: "assistant", content: reply });
     if (h.length > 20) h.splice(0, 2);
     return reply;
-  } catch { return lang === "hi" ? "Technical dikkat aa rahi hai, kripya call karein." : "Technical issue, please call us on 9711311785"; }
+  } catch { return lang === "hi" ? "Technical dikkat aa rahi hai, kripya call karein." : "Technical issue, please call us."; }
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -591,7 +591,7 @@ app.post("/api/appointments", async (req, res) => {
     // dashboard booking also respects slot conflict (#4)
     const clash = await Appointment.findOne({ date: req.body.date, time: req.body.time, status: "confirmed" });
     if (clash) return res.status(409).json({ error: "Slot already booked", freeSlots: await freeSlots(req.body.date) });
-    const a = new Appointment({ therapist: DOCTOR_NAME, amount: CONSULT_FEE, payStatus: "clinic", ...req.body });
+    const a = new Appointment({ amount: CONSULT_FEE, payStatus: "clinic", ...req.body, therapist: DOCTOR_NAME });
     await a.save(); res.json(a);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -642,6 +642,12 @@ app.get("/api/packages/:patientId", async (req, res) => { try { res.json(await P
 app.post("/api/packages", async (req, res) => { try { const p = new Package(req.body); await p.save(); res.json(p); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put("/api/packages/:id", async (req, res) => { try { res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true })); } catch (e) { res.status(500).json({ error: e.message }); } });
 
+// PACKAGE TEMPLATES — the catalog of sellable packages (name, sessions, price)
+app.get("/api/package-templates", async (req, res) => { try { res.json(await PackageTemplate.find({ isActive: true }).sort({ createdAt: -1 })); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/package-templates", async (req, res) => { try { const t = new PackageTemplate(req.body); await t.save(); res.json(t); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put("/api/package-templates/:id", async (req, res) => { try { res.json(await PackageTemplate.findByIdAndUpdate(req.params.id, req.body, { new: true })); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.delete("/api/package-templates/:id", async (req, res) => { try { await PackageTemplate.findByIdAndUpdate(req.params.id, { isActive: false }); res.json({ deleted: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
 // (#2) mark one session as done — the dashboard "Mark session" button hits this
 app.post("/api/packages/:id/mark-session", async (req, res) => {
   try {
@@ -653,13 +659,12 @@ app.post("/api/packages/:id/mark-session", async (req, res) => {
     await pkg.save();
     try { await Session.create({ packageId: pkg._id, patientId: pkg.patientId, no: pkg.done, date: istDate() }); } catch (e) {}
     const left = Math.max(0, pkg.total - pkg.done);
-    // gentle WhatsApp nudge to patient when sessions run low / finish
+    // (#2) every time a session is marked, tell the patient how many are left
     if (pkg.patientPhone) {
-      if (left === 0) {
-        await sendMessage(pkg.patientPhone, `✅ Aapka package "${pkg.name}" complete ho gaya hai (${pkg.total}/${pkg.total} sessions). Aage continue karne ke liye reply karein. — ${CLINIC}`);
-      } else if (left <= 2) {
-        await sendMessage(pkg.patientPhone, `🔔 Reminder: aapke package "${pkg.name}" mein sirf ${left} session bache hain. — ${CLINIC}`);
-      }
+      const msg = left === 0
+        ? `✅ Aapka package "${pkg.name}" complete ho gaya hai — saare ${pkg.total} sessions ho gaye. 🙏\nAage continue karne ke liye reply karein. — ${CLINIC}`
+        : `✅ Aaj ka session mark ho gaya (${pkg.done}/${pkg.total}).\nPackage "${pkg.name}" mein ab *${left} session* bache hain. — ${CLINIC}`;
+      try { await sendMessage(pkg.patientPhone, msg); } catch (e) { console.log("Session msg error:", e.message); }
     }
     res.json({ updated: pkg });
   } catch (e) { res.status(500).json({ error: e.message }); }
