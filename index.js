@@ -40,7 +40,7 @@ const CONSULT_FEE  = 500;
 const REVIEW_LINK  = process.env.GOOGLE_REVIEW_LINK || "";
 // Clinic working hours — edit this list to match the studio's real slots.
 const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
-               "16:00","16:30","17:00","17:30","18:00","18:30","19:00"];
+               "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
 const CLOSED_DAY = 0; // 0 = Sunday closed
 
 // ─── MONGODB ─────────────────────────────────────────────────────────
