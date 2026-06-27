@@ -199,6 +199,7 @@ HOURS: Monday to Saturday. Closed Sunday.
 CONSULTATION FEE: Rs ${CONSULT_FEE}. Video consultation available.
 RULES:
 - Warm, friendly, concise (under 120 words). No markdown symbols.
+- When a patient wants to book, gently ask what dental problem or reason the consultation is for (e.g. tooth pain, swelling, cleaning, checkup) if they haven't already said it — ask this before or while confirming the slot.
 - If the user writes Hindi/Hinglish, reply in the same language.
 - Never invent other doctors — there is only ${DOCTOR_NAME}.`;
 
@@ -364,7 +365,7 @@ app.post("/webhook", async (req, res) => {
           messages: [{
             role: "system",
             content: `Extract a dental appointment. Today: ${istDate()}. Tomorrow: ${new Date(Date.parse(istDate()) + 86400000).toISOString().split("T")[0]}.
-Return ONLY JSON: {"hasAppointment":bool,"date":"YYYY-MM-DD or null","time":"HH:MM or null","mode":"clinic or video","type":"Consultation/Cleaning/Filling/Root Canal/Checkup or null"}
+Return ONLY JSON: {"hasAppointment":bool,"date":"YYYY-MM-DD or null","time":"HH:MM or null","mode":"clinic or video","type":"Consultation/Cleaning/Filling/Root Canal/Checkup or null","reason":"the dental problem/reason the patient gave in their own words, or null"}
 hasAppointment=true only if BOTH date AND time are present. mode="video" if patient mentions video/online.`
           }, { role: "user", content: `${convHistory}\nPatient: ${text}` }],
         }, { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } });
@@ -383,12 +384,13 @@ hasAppointment=true only if BOTH date AND time are present. mode="video" if pati
             patientId: patient._id, patientName: patient.name, patientPhone: cleanPhone,
             therapist: DOCTOR_NAME, date: d.date, time: d.time,
             type: d.type || "Consultation", status: "confirmed",
+            reason: d.reason || undefined,
             mode, language: lang, payStatus: "clinic", amount: CONSULT_FEE,
-            videoLink: mode === "video" ? `https://meet.jit.si/VedicDental-${Date.now().toString(36)}` : undefined,
+            videoLink: mode === "video" ? (process.env.ZOOM_LINK || `https://meet.jit.si/VedicDental-${Date.now().toString(36)}`) : undefined,
             bookedVia: "whatsapp",
           });
           await sendMessage(from, T.booked(lang, appt));
-          await sendMessage(DOCTOR_PHONE, `🆕 New booking\n\n${appt.patientName} (${cleanPhone})\n${appt.type} · ${mode === "video" ? "🎥 video" : "📍 clinic"}\n📅 ${appt.date} ${appt.time}\n\n— ${CLINIC}`);
+          await sendMessage(DOCTOR_PHONE, `🆕 New booking\n\n${appt.patientName} (${cleanPhone})\n${appt.type} · ${mode === "video" ? "🎥 video" : "📍 clinic"}\n📅 ${appt.date} ${appt.time}${appt.reason ? `\n📝 Reason: ${appt.reason}` : ""}${mode === "video" && appt.videoLink ? `\n🎥 Join: ${appt.videoLink}` : ""}\n\n— ${CLINIC}`);
           return;
         }
       } catch (e) { console.log("Extraction error:", e.message); }
@@ -462,6 +464,44 @@ app.all("/api/cron/reminders", async (req, res) => {
         : `⏰ Reminder: appointment in 30 minutes (${a.time}).\n${a.mode === "video" ? "🎥 " + a.videoLink : "📍 " + CLINIC}`);
       a.reminders.halfSent = true; await a.save(); sent++;
     }
+  }
+  res.json({ sent });
+});
+
+// (#11) package renewal — when a patient's package is almost finished, nudge them
+// on WhatsApp + email to renew. Trigger daily from cron-job.org.
+app.all("/api/cron/package-renewal", async (req, res) => {
+  if (!cronGuard(req, res)) return;
+  // active packages with 2 or fewer sessions left, not yet reminded
+  const pkgs = await Package.find({ active: true, renewalNotified: { $ne: true } });
+  let sent = 0;
+  for (const pkg of pkgs) {
+    const left = Math.max(0, (pkg.total || 0) - (pkg.done || 0));
+    if (left > 2) continue;
+    const patient = pkg.patientId ? await Patient.findById(pkg.patientId) : null;
+    const phone = pkg.patientPhone || patient?.phone;
+    const leftTxt = left === 0 ? "complete ho chuka hai" : `mein sirf ${left} session bache hain`;
+    if (phone) {
+      await sendMessage(phone, `🔔 ${pkg.patientName || "Namaste"}, aapka package "${pkg.name}" ${leftTxt}. Renew karne ke liye is message ka reply karein ya clinic par baat karein. — ${CLINIC}`);
+    }
+    if (MAIL_READY && patient?.email) {
+      try {
+        await mailer.sendMail({
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          to: patient.email,
+          subject: `Package renewal reminder — ${CLINIC}`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;border:1px solid #eee;border-radius:10px;overflow:hidden">
+            <div style="background:#0E7490;color:#fff;padding:16px 20px"><h2 style="margin:0">🦷 ${CLINIC}</h2></div>
+            <div style="padding:20px;font-size:14px;color:#333">
+              <p>Namaste ${pkg.patientName || ""},</p>
+              <p>Aapka treatment package <b>"${pkg.name}"</b> ${left === 0 ? "complete ho chuka hai" : `lagbhag complete ho raha hai — sirf <b>${left} session</b> bache hain`}.</p>
+              <p>Treatment continue rakhne ke liye package renew karwa lein. Koi bhi sawaal ho to WhatsApp par reply karein.</p>
+              <p style="margin-top:18px;color:#888;font-size:12px">— ${DOCTOR_NAME}, ${CLINIC}</p>
+            </div></div>`,
+        });
+      } catch (e) { console.error("Renewal email:", e.message); }
+    }
+    pkg.renewalNotified = true; await pkg.save(); sent++;
   }
   res.json({ sent });
 });
@@ -569,6 +609,29 @@ app.get("/api/packages", async (req, res) => { try { res.json(await Package.find
 app.get("/api/packages/:patientId", async (req, res) => { try { res.json(await Package.find({ patientId: req.params.patientId }).sort({ createdAt: -1 })); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post("/api/packages", async (req, res) => { try { const p = new Package(req.body); await p.save(); res.json(p); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put("/api/packages/:id", async (req, res) => { try { res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true })); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// (#2) mark one session as done — the dashboard "Mark session" button hits this
+app.post("/api/packages/:id/mark-session", async (req, res) => {
+  try {
+    const pkg = await Package.findById(req.params.id);
+    if (!pkg) return res.status(404).json({ error: "Package not found" });
+    if ((pkg.done || 0) >= pkg.total) return res.status(400).json({ error: "All sessions already used" });
+    pkg.done = (pkg.done || 0) + 1;
+    if (pkg.done >= pkg.total) pkg.active = false;
+    await pkg.save();
+    try { await Session.create({ packageId: pkg._id, patientId: pkg.patientId, no: pkg.done, date: istDate() }); } catch (e) {}
+    const left = Math.max(0, pkg.total - pkg.done);
+    // gentle WhatsApp nudge to patient when sessions run low / finish
+    if (pkg.patientPhone) {
+      if (left === 0) {
+        await sendMessage(pkg.patientPhone, `✅ Aapka package "${pkg.name}" complete ho gaya hai (${pkg.total}/${pkg.total} sessions). Aage continue karne ke liye reply karein. — ${CLINIC}`);
+      } else if (left <= 2) {
+        await sendMessage(pkg.patientPhone, `🔔 Reminder: aapke package "${pkg.name}" mein sirf ${left} session bache hain. — ${CLINIC}`);
+      }
+    }
+    res.json({ updated: pkg });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // (#9) TREATMENT PLANS — these routes were MISSING, so plans never saved. Added now.
 app.get("/api/treatment-plans/:patientId", async (req, res) => { try { res.json(await TreatmentPlan.find({ patientId: req.params.patientId }).sort({ createdAt: -1 })); } catch (e) { res.status(500).json({ error: e.message }); } });
