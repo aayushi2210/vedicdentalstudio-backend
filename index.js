@@ -41,7 +41,7 @@ const RECEPTION_PHONE = process.env.RECEPTION_PHONE || "+91-XXXXXXXXXX";   // �
 const REVIEW_LINK  = process.env.GOOGLE_REVIEW_LINK || "";
 // Clinic working hours — edit this list to match the studio's real slots.
 const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
-               "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
+               "16:00","16:30","17:00","17:30","18:00","18:30","19:00"];
 const CLOSED_DAY = 0; // 0 = Sunday closed
 
 // ─── MONGODB ─────────────────────────────────────────────────────────
@@ -109,6 +109,12 @@ const T = {
   askReason: (lang) => lang === "hi"
     ? `Theek hai! 📋 Booking confirm karne se pehle — aap *kis problem* ke liye consultation lena chahte hain? (jaise: daant me dard, sujan, cleaning, checkup)\n\n💵 Consultation fee: ₹${CONSULT_FEE} (clinic par cash/UPI)`
     : `Great! 📋 Before I confirm — what is the consultation *for*? (e.g. tooth pain, swelling, cleaning, checkup)\n\n💵 Consultation fee: ₹${CONSULT_FEE} (pay at clinic, cash/UPI)`,
+  askDate: (lang, time) => lang === "hi"
+    ? `${time} ka time noted! 📅 Aap kis din aana chahenge? (jaise: kal, parso, ya 5 July)`
+    : `Noted ${time}! 📅 Which day would you like to come in? (e.g. tomorrow, or 5 July)`,
+  askTime: (lang, date) => lang === "hi"
+    ? `${date} — theek hai! ⏰ Kis time aana chahenge? Slots: 10 AM se 7 PM (Mon–Sat).`
+    : `${date} — got it! ⏰ What time works for you? Slots: 10 AM to 7 PM (Mon–Sat).`,
   booked: (lang, a) => {
     const when = `${a.date} ${a.time}`;
     const vid  = a.mode === "video" && a.videoLink
@@ -199,13 +205,14 @@ async function freeSlots(date) {
 // ─── AI (single doctor, dental) ──────────────────────────────────────
 const SYSTEM_PROMPT = `You are the receptionist chatbot for ${CLINIC}, a dental clinic in Delhi NCR, India.
 DOCTOR: ${DOCTOR_NAME} (the only dentist; handles everything).
-HOURS: Monday to Saturday. Closed Sunday.
+HOURS: Monday to Saturday, 10 AM–7 PM. Closed Sunday.
 CONSULTATION FEE: Rs ${CONSULT_FEE}. Video consultation available.
 RULES:
-- Warm, friendly, concise (under 120 words). No markdown symbols.
-- When a patient wants to book, gently ask what dental problem or reason the consultation is for (e.g. tooth pain, swelling, cleaning, checkup) if they haven't already said it — ask this before or while confirming the slot.
+- Warm, friendly, concise (under 80 words). No markdown symbols.
+- VERY IMPORTANT: You CANNOT confirm or book appointments. The booking system does that automatically and ONLY after it has BOTH a date and a time. So you must NEVER say an appointment is "confirmed", "booked", or "scheduled", and NEVER promise to send a video link. Saying so would be a lie because nothing is saved yet.
+- When a patient wants to book, your ONLY job is to collect the missing details: (1) which DATE, (2) which TIME, (3) clinic or video, (4) the reason/problem. If a date or time is missing, ask for it plainly and stop. Do not pretend it is done.
 - If the user writes Hindi/Hinglish, reply in the same language.
-- Never invent other doctors — there is only ${DOCTOR_NAME}.`;
+- There is only one dentist, ${DOCTOR_NAME}. Never invent other doctors.`;
 
 async function getAIReply(phone, msg, lang, ctx = "") {
   if (!conversations[phone]) conversations[phone] = [];
@@ -426,6 +433,9 @@ hasAppointment=true only if BOTH date AND time are present. mode="video" if pati
           await createBooking({ from, patient, cleanPhone, lang, date: d.date, time: d.time, mode, type: d.type, reason: d.reason });
           return;
         }
+        // partial booking info → ask for the missing piece ourselves (never let the AI fake a confirmation)
+        if (d.time && !d.date) { await sendMessage(from, T.askDate(lang, d.time)); return; }
+        if (d.date && !d.time) { await sendMessage(from, T.askTime(lang, d.date)); return; }
       } catch (e) { console.log("Extraction error:", e.message); }
     }
 
