@@ -37,9 +37,10 @@ const appointmentSchema = new mongoose.Schema({
 
   // NEW — reminder flags so a reminder is never sent twice
   reminders: {
+    dayBeforeSent: { type: Boolean, default: false },  // evening before
     morningSent: { type: Boolean, default: false },   // 8 AM same-day nudge
     hourSent:    { type: Boolean, default: false },    // 1 hour before
-    halfSent:    { type: Boolean, default: false },    // 30 min before
+    halfSent:    { type: Boolean, default: false },    // 30 min before (kept for compatibility)
   },
 
   bookedVia: { type: String, enum: BOOKING_SOURCES, default: 'whatsapp' },
