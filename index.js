@@ -37,10 +37,11 @@ const CLINIC       = "Vedic Dental Studio";
 const DOCTOR_NAME  = process.env.DOCTOR_NAME || "Dr. Shailly Ujjwal";   // ← set the real name in env
 const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "919711311785";
 const CONSULT_FEE  = 500;
+const RECEPTION_PHONE = process.env.RECEPTION_PHONE || "+91-XXXXXXXXXX";   // ← set reception number in env
 const REVIEW_LINK  = process.env.GOOGLE_REVIEW_LINK || "";
 // Clinic working hours — edit this list to match the studio's real slots.
 const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
-               "16:00","16:30","17:00","17:30","18:00","18:30","19:00"];
+               "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
 const CLOSED_DAY = 0; // 0 = Sunday closed
 
 // ─── MONGODB ─────────────────────────────────────────────────────────
@@ -127,8 +128,8 @@ const T = {
     ? `Namaste ${name}! 🙏\n\n${CLINIC} mein aane ke liye dhanyavaad. Aapka anubhav kaisa raha? Neeche tap karke Google par review dein — humein bahut khushi hogi:\n\n${REVIEW_LINK}`
     : `Hi ${name}! 🙏\n\nThank you for visiting ${CLINIC}. How was your experience? Tap below to leave a quick Google review — it means a lot:\n\n${REVIEW_LINK}`,
   human: (lang) => lang === "hi"
-    ? `Reception se jodte hain.\n📞 +91-XXXXXXXXXX (Mon–Sat)`
-    : `Connecting you to reception.\n📞 +91-XXXXXXXXXX (Mon–Sat)`,
+    ? `Reception se baat karne ke liye humein call karein:\n📞 ${RECEPTION_PHONE}\n(Mon–Sat, 9 AM – 7 PM) — ${CLINIC}`
+    : `Please call us on:\n📞 ${RECEPTION_PHONE}\n(Mon–Sat, 9 AM – 7 PM) — ${CLINIC}`,
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -447,6 +448,22 @@ function cronGuard(req, res) {
   return true;
 }
 
+// (#2) REMINDER 1 of 3 — evening before: message patients with an appointment TOMORROW
+app.all("/api/cron/patient-daybefore", async (req, res) => {
+  if (!cronGuard(req, res)) return;
+  const t = new Date(Date.now() + 5.5 * 3600 * 1000 + 24 * 3600 * 1000); // IST tomorrow
+  const tomorrow = t.toISOString().split("T")[0];
+  const appts = await Appointment.find({ date: tomorrow, status: "confirmed", "reminders.dayBeforeSent": { $ne: true } });
+  for (const a of appts) {
+    const hi = a.language === "hi";
+    await sendMessage(a.patientPhone, hi
+      ? `📅 Reminder: kal aapki appointment hai, ${a.patientName}!\n🦷 ${a.type} — ${a.time}\n${a.mode === "video" ? "🎥 video consultation" : "📍 " + CLINIC}\n\nKisi badlav ke liye reply karein. — ${CLINIC}`
+      : `📅 Reminder: you have an appointment tomorrow, ${a.patientName}!\n🦷 ${a.type} — ${a.time}\n${a.mode === "video" ? "🎥 video consultation" : "📍 " + CLINIC}\n\nReply here for any changes. — ${CLINIC}`);
+    a.reminders.dayBeforeSent = true; await a.save();
+  }
+  res.json({ sent: appts.length });
+});
+
 // (#6) 8 AM — morning reminder to every patient with an appointment today
 app.all("/api/cron/patient-morning", async (req, res) => {
   if (!cronGuard(req, res)) return;
@@ -476,7 +493,7 @@ app.all("/api/cron/doctor-morning", async (req, res) => {
   res.json({ sent: 1, count: appts.length });
 });
 
-// (#6) every ~15 min — send 1-hour & 30-min reminders that are now due
+// (#2) REMINDER 3 of 3 — every ~15 min, send the "1 hour before" reminder when due
 app.all("/api/cron/reminders", async (req, res) => {
   if (!cronGuard(req, res)) return;
   const today = istDate();
@@ -485,16 +502,11 @@ app.all("/api/cron/reminders", async (req, res) => {
   for (const a of appts) {
     const mins = minsUntil(a.date, a.time);
     const hi = a.language === "hi";
-    if (mins <= 65 && mins >= 50 && !a.reminders.hourSent) {
+    if (mins <= 65 && mins >= 45 && !a.reminders.hourSent) {
       await sendMessage(a.patientPhone, hi
         ? `⏰ Reminder: 1 ghante mein aapki appointment hai (${a.time}).\n${a.mode === "video" ? "🎥 " + a.videoLink : "📍 " + CLINIC}`
         : `⏰ Reminder: your appointment is in 1 hour (${a.time}).\n${a.mode === "video" ? "🎥 " + a.videoLink : "📍 " + CLINIC}`);
       a.reminders.hourSent = true; await a.save(); sent++;
-    } else if (mins <= 35 && mins >= 20 && !a.reminders.halfSent) {
-      await sendMessage(a.patientPhone, hi
-        ? `⏰ Reminder: 30 minute mein appointment (${a.time}).\n${a.mode === "video" ? "🎥 " + a.videoLink : "📍 " + CLINIC}`
-        : `⏰ Reminder: appointment in 30 minutes (${a.time}).\n${a.mode === "video" ? "🎥 " + a.videoLink : "📍 " + CLINIC}`);
-      a.reminders.halfSent = true; await a.save(); sent++;
     }
   }
   res.json({ sent });
@@ -641,6 +653,18 @@ app.get("/api/packages", async (req, res) => { try { res.json(await Package.find
 app.get("/api/packages/:patientId", async (req, res) => { try { res.json(await Package.find({ patientId: req.params.patientId }).sort({ createdAt: -1 })); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post("/api/packages", async (req, res) => { try { const p = new Package(req.body); await p.save(); res.json(p); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put("/api/packages/:id", async (req, res) => { try { res.json(await Package.findByIdAndUpdate(req.params.id, req.body, { new: true })); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// (#9) mark a package as PAID — so its amount shows up in earnings as a session payment
+app.post("/api/packages/:id/mark-paid", async (req, res) => {
+  try {
+    const pkg = await Package.findByIdAndUpdate(req.params.id, { payStatus: "paid", paidAt: new Date() }, { new: true });
+    if (!pkg) return res.status(404).json({ error: "Package not found" });
+    if (pkg.patientPhone) {
+      try { await sendMessage(pkg.patientPhone, `🧾 Payment received — ₹${pkg.amount || 0} for "${pkg.name}". Dhanyavaad! — ${CLINIC}`); } catch (e) {}
+    }
+    res.json({ updated: pkg });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // PACKAGE TEMPLATES — the catalog of sellable packages (name, sessions, price)
 app.get("/api/package-templates", async (req, res) => { try { res.json(await PackageTemplate.find({ isActive: true }).sort({ createdAt: -1 })); } catch (e) { res.status(500).json({ error: e.message }); } });
