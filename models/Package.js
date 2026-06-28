@@ -13,6 +13,7 @@ const packageSchema = new mongoose.Schema({
   done:        { type: Number, default: 0, min: [0, 'Cannot be negative'] },
   amount:      { type: Number, min: [0, 'Amount cannot be negative'] },
   payStatus:   { type: String, enum: PAY_STATUS, default: 'pending' },
+  paidAt:      { type: Date },
   therapist:   { type: String, trim: true },
   startDate:   { type: String, validate: { validator: isValidDateString, message: 'Start date must be YYYY-MM-DD' } },
   active:      { type: Boolean, default: true },
