@@ -279,8 +279,14 @@ app.post("/webhook", async (req, res) => {
                  : caption.includes("prescription") || caption.includes("rx") ? "prescription"
                  : message.type === "document" ? "report" : "image";
       try {
-        await storeWhatsappMedia(mediaId, kind, patient);
-        await sendMessage(from, T.docSaved(lang));
+        const saved = await storeWhatsappMedia(mediaId, kind, patient);
+        if (saved) {
+          await sendMessage(from, T.docSaved(lang));
+        } else {
+          await sendMessage(from, lang === "hi"
+            ? "Abhi document upload setup nahi hua hai — kripya document seedhe clinic ko bhejein. 🙏"
+            : "Document upload isn't set up yet — please share it with the clinic directly. 🙏");
+        }
       } catch (e) {
         console.error("Doc upload error:", e.message);
         await sendMessage(from, lang === "hi" ? "Document save nahi ho paya, kripya dobara bhejein." : "Couldn't save the document, please resend.");
@@ -534,9 +540,11 @@ app.all("/api/cron/package-renewal", async (req, res) => {
     if (left > 2) continue;
     const patient = pkg.patientId ? await Patient.findById(pkg.patientId) : null;
     const phone = pkg.patientPhone || patient?.phone;
-    const leftTxt = left === 0 ? "complete ho chuka hai" : `mein sirf ${left} session bache hain`;
+    const hi = (patient?.language || "en") === "hi";
     if (phone) {
-      await sendMessage(phone, `🔔 ${pkg.patientName || "Namaste"}, aapka package "${pkg.name}" ${leftTxt}. Renew karne ke liye is message ka reply karein ya clinic par baat karein. — ${CLINIC}`);
+      await sendMessage(phone, hi
+        ? `🔔 ${pkg.patientName || "Namaste"}, aapka package "${pkg.name}" ${left === 0 ? "complete ho chuka hai" : `mein sirf ${left} session bache hain`}. Renew karne ke liye reply karein ya clinic se baat karein. — ${CLINIC}`
+        : `🔔 ${pkg.patientName || "Hi"}, your package "${pkg.name}" ${left === 0 ? "is complete" : `has only ${left} session(s) left`}. Reply to renew or contact the clinic. — ${CLINIC}`);
     }
     if (MAIL_READY && patient?.email) {
       try {
@@ -670,7 +678,11 @@ app.post("/api/packages/:id/mark-paid", async (req, res) => {
     const pkg = await Package.findByIdAndUpdate(req.params.id, { payStatus: "paid", paidAt: new Date() }, { new: true });
     if (!pkg) return res.status(404).json({ error: "Package not found" });
     if (pkg.patientPhone) {
-      try { await sendMessage(pkg.patientPhone, `🧾 Payment received — ₹${pkg.amount || 0} for "${pkg.name}". Dhanyavaad! — ${CLINIC}`); } catch (e) {}
+      const pt = pkg.patientId ? await Patient.findById(pkg.patientId) : null;
+      const hi = (pt?.language || "en") === "hi";
+      try { await sendMessage(pkg.patientPhone, hi
+        ? `🧾 Payment mila — ₹${pkg.amount || 0} ("${pkg.name}" ke liye). Dhanyavaad! — ${CLINIC}`
+        : `🧾 Payment received — ₹${pkg.amount || 0} for "${pkg.name}". Thank you! — ${CLINIC}`); } catch (e) {}
     }
     res.json({ updated: pkg });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -693,11 +705,17 @@ app.post("/api/packages/:id/mark-session", async (req, res) => {
     await pkg.save();
     try { await Session.create({ packageId: pkg._id, patientId: pkg.patientId, no: pkg.done, date: istDate() }); } catch (e) {}
     const left = Math.max(0, pkg.total - pkg.done);
-    // (#2) every time a session is marked, tell the patient how many are left
+    // (#2) every time a session is marked, tell the patient how many are left — in their language
     if (pkg.patientPhone) {
+      const pt = pkg.patientId ? await Patient.findById(pkg.patientId) : null;
+      const hi = (pt?.language || "en") === "hi";
       const msg = left === 0
-        ? `✅ Aapka package "${pkg.name}" complete ho gaya hai — saare ${pkg.total} sessions ho gaye. 🙏\nAage continue karne ke liye reply karein. — ${CLINIC}`
-        : `✅ Aaj ka session mark ho gaya (${pkg.done}/${pkg.total}).\nPackage "${pkg.name}" mein ab *${left} session* bache hain. — ${CLINIC}`;
+        ? (hi
+            ? `✅ Aapka package "${pkg.name}" complete ho gaya hai — saare ${pkg.total} sessions ho gaye. 🙏\nAage continue karne ke liye reply karein. — ${CLINIC}`
+            : `✅ Your package "${pkg.name}" is complete — all ${pkg.total} sessions done. 🙏\nReply to continue further. — ${CLINIC}`)
+        : (hi
+            ? `✅ Aaj ka session mark ho gaya (${pkg.done}/${pkg.total}).\nPackage "${pkg.name}" mein ab *${left} session* bache hain. — ${CLINIC}`
+            : `✅ Today's session is marked (${pkg.done}/${pkg.total}).\nYou have *${left} session(s)* left in "${pkg.name}". — ${CLINIC}`);
       try { await sendMessage(pkg.patientPhone, msg); } catch (e) { console.log("Session msg error:", e.message); }
     }
     res.json({ updated: pkg });
