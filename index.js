@@ -39,9 +39,9 @@ const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "9711311785";
 const CONSULT_FEE  = 500;
 const RECEPTION_PHONE = process.env.RECEPTION_PHONE || "+91-XXXXXXXXXX";   // ← set reception number in env
 const REVIEW_LINK = process.env.GOOGLE_REVIEW_LINK || "";
-const UPIID = process.env.UPIID || "";
+const UPIID = 9711311785@ybl;
 // Clinic working hours — edit this list to match the studio's real slots.
-const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
+const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30",
                "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
 const CLOSED_DAY = 0; // 0 = Sunday closed
 
