@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════
 //  VEDIC DENTAL STUDIO
 //  Single doctor · Hindi/English · Video consults · Slot conflict check
-//  Reminders · Cancellation alerts · WhatsApp document upload (secured)
+//  Reminders · Cancellation alerts · WhatsApp document upload (secured)f
 //  Manual pay-at-clinic + emailed invoice
 //
 //  ENV VARS (set on Render):
@@ -39,7 +39,7 @@ const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "919711311785";
 const CONSULT_FEE  = 500;
 const RECEPTION_PHONE = process.env.RECEPTION_PHONE || "+91-XXXXXXXXXX";   // ← set reception number in env
 const REVIEW_LINK = process.env.GOOGLE_REVIEW_LINK || "";
-const UPIID = process.env.UPIID || "9711311785@ybl";
+const UPIID = process.env.UPIID || "";
 // Clinic working hours — edit this list to match the studio's real slots.
 const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
                "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30","20:00"];
@@ -118,11 +118,11 @@ const T = {
     : `${date} — got it! ⏰ What time works for you? Slots: 10 AM to 7 PM (Mon–Sat).`,
   booked: (lang, a) => {
     const when = `${a.date} ${a.time}`;
+    const payLink = `upi://pay?pa=${UPIID}&pn=Vedic%20Dental%20Studio&am=${a.amount}&cu=INR`;
     const vid  = a.mode === "video" && a.videoLink
       ? (lang === "hi"
-        ? `\n\n💳 *Step 1 — Payment (zaroori):*\nUPI par ₹${a.amount} bhejein 👉 ${UPIID}\nPhir payment ka *screenshot yahin bhej dein*.\n\n✅ Payment confirm hote hi consultation pakki.\n\n🎥 Video link (sirf payment ke baad valid):\n${a.videoLink}\n(Appointment time par tap karein)`
-          : `\n\n💳 *Step 1 — Payment (required):*\nSend ₹${a.amount} via UPI 👉 ${UPIID}\nThen *share the payment screenshot here*.\n\n✅ Your consultation is confirmed once payment is received.\n\n🎥 Video link (valid only after payment):\n${a.videoLink}\n(Tap at your appointment time)`)
-      : (lang === "hi" ? `\n\n📍 Clinic par aaiye. Payment clinic par hi.` : `\n\n📍 Please visit the clinic. Payment at clinic.`);
+        ? `\n\n💳 *Step 1 — Payment (zaroori):*\nTap karke pay karein 👉 ${payLink}\n(ya UPI: ${UPIID} par ₹${a.amount})\nPhir payment ka *screenshot yahin bhej dein*.\n\n✅ Payment confirm hote hi consultation pakki.\n\n🎥 Video link (sirf payment ke baad valid):\n${a.videoLink}\n(Appointment time par tap karein)`
+          : `\n\n💳 *Step 1 — Payment (required):*\nTap to pay 👉 ${payLink}\n(or UPI: ${UPIID} for ₹${a.amount})\nThen *share the payment screenshot here*.\n\n✅ Your consultation is confirmed once payment is received.\n\n🎥 Video link (valid only after payment):\n${a.videoLink}\n(Tap at your appointment time)`)      : (lang === "hi" ? `\n\n📍 Clinic par aaiye. Payment clinic par hi.` : `\n\n📍 Please visit the clinic. Payment at clinic.`);
     return lang === "hi"
       ? `✅ Appointment confirm!\n\n👨‍⚕️ ${a.therapist}\n📅 ${when}\n🦷 ${a.type}\n💵 ₹${a.amount}${vid}\n\n— ${CLINIC}`
       : `✅ Appointment confirmed!\n\n👨‍⚕️ ${a.therapist}\n📅 ${when}\n🦷 ${a.type}\n💵 ₹${a.amount}${vid}\n\n— ${CLINIC}`;
