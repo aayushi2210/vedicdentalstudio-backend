@@ -798,6 +798,7 @@ app.get("/", (req, res) => res.json({
   status: "running", clinic: CLINIC,
   db: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
   cloudinary: CLOUD_READY, email: MAIL_READY,
+  upi: UPIID,
 }));
 
 const PORT = process.env.PORT || 3000;
