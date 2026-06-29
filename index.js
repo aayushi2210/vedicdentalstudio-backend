@@ -39,6 +39,7 @@ const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "919711311785";
 const CONSULT_FEE  = 500;
 const RECEPTION_PHONE = process.env.RECEPTION_PHONE || "+91-XXXXXXXXXX";   // ← set reception number in env
 const REVIEW_LINK  = process.env.GOOGLE_REVIEW_LINK || "";
+const UPI_ID       = process.env.UPI_ID || "yourname@upi";
 // Clinic working hours — edit this list to match the studio's real slots.
 const SLOTS = ["10:00","10:30","11:00","11:30","12:00","12:30","13:00","13:30",
                "16:00","16:30","17:00","17:30","18:00","18:30","19:00"];
@@ -118,7 +119,9 @@ const T = {
   booked: (lang, a) => {
     const when = `${a.date} ${a.time}`;
     const vid  = a.mode === "video" && a.videoLink
-      ? (lang === "hi" ? `\n\n🎥 Video consultation link:\n${a.videoLink}\n(Appointment time par tap karein)` : `\n\n🎥 Video consultation link:\n${a.videoLink}\n(Tap at your appointment time)`)
+      ? (lang === "hi"
+          ? `\n\n💳 *Payment (pehle karein):*\nUPI par ₹${a.amount} bhejein 👉 ${UPI_ID}\nPayment ka screenshot yahin bhej dein — milte hi slot pakka.\n\n🎥 Video link:\n${a.videoLink}\n(Appointment time par tap karein)`
+          : `\n\n💳 *Payment (please pay first):*\nSend ₹${a.amount} via UPI 👉 ${UPI_ID}\nShare the payment screenshot here — your slot is confirmed once received.\n\n🎥 Video link:\n${a.videoLink}\n(Tap at your appointment time)`)
       : (lang === "hi" ? `\n\n📍 Clinic par aaiye. Payment clinic par hi.` : `\n\n📍 Please visit the clinic. Payment at clinic.`);
     return lang === "hi"
       ? `✅ Appointment confirm!\n\n👨‍⚕️ ${a.therapist}\n📅 ${when}\n🦷 ${a.type}\n💵 ₹${a.amount}${vid}\n\n— ${CLINIC}`
