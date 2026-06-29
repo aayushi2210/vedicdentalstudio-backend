@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════
 //  VEDIC DENTAL STUDIO
 //  Single doctor · Hindi/English · Video consults · Slot conflict check
-//  Reminders · Cancellation alerts · WhatsApp document upload (secured)f
+//  Reminders · Cancellation alerts · WhatsApp document upload (secured)
 //  Manual pay-at-clinic + emailed invoice
 //
 //  ENV VARS (set on Render):
@@ -35,7 +35,7 @@ app.use((req, res, next) => {
 // ─── CLINIC CONFIG ───────────────────────────────────────────────────
 const CLINIC       = "Vedic Dental Studio";
 const DOCTOR_NAME  = process.env.DOCTOR_NAME || "Dr. Shailly Ujjwal";   // ← set the real name in env
-const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "919711311785";
+const DOCTOR_PHONE = process.env.DOCTOR_PHONE || "9711311785";
 const CONSULT_FEE  = 500;
 const RECEPTION_PHONE = process.env.RECEPTION_PHONE || "+91-XXXXXXXXXX";   // ← set reception number in env
 const REVIEW_LINK = process.env.GOOGLE_REVIEW_LINK || "";
